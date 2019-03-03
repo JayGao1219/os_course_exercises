@@ -18,11 +18,41 @@
 
 - 你理解的对于类似ucore这样需要进程/虚存/文件系统的操作系统，在硬件设计上至少需要有哪些直接的支持？至少应该提供哪些功能的特权指令？
 
+  ###### 硬件支持
+
+  1. 进程切换需要硬件支持时钟中断
+  2. 虚拟管理需要硬件支持地址映射机制
+  3. 文件系统需要硬件有稳定的存储介质来确保不丢失数据，从而保证操作系统的稳定性
+
+  ###### 特权指令
+
+  1. 中断使能、保存程序执行状态
+  2. 设置内存寻址模式以及与页表等于虚存相关的指令
+  3. 执行I/O操作、寻址操作
+
 - 你理解的x86的实模式和保护模式有什么区别？物理地址、线性地址、逻辑地址的含义分别是什么？
+
+  实模式只有16位寻址空间，且没有保护的机制；保护模式有32位的寻址空间，并且保护模式支持内存分页机制，提供了对虚拟内存的良好支持，因此限制应用程序在一个有限的空间中运行，不会破坏操作系统，因此通过这种模式来确保操作系统的安全。
+
+  |   地址   |                            含义                            |
+  | :------: | :--------------------------------------------------------: |
+  | 物理地址 | 处理器提交到总线上用于访问计算机系统中的内存和外设最终地址 |
+  | 线性地址 |            每个运行应用程序可以访问到的地址空间            |
+  | 逻辑地址 |                 应用程序直接使用的地址空间                 |
 
 - 你理解的risc-v的特权模式有什么区别？不同 模式在地址访问方面有何特征？
 
+  特权模式中包括三种模式：
+
+  - Machine Mode：机器模式，简称M Mode。
+  - Supervisor Mode：监督模式，简称S Mode。
+  - User Mode：用户模式，简称U Mode
+
+  RISC-V架构定义M Mode为必选模式，另外两种为可选模式。
+
 - 理解ucore中list_entry双向链表数据结构及其4个基本操作函数和ucore中一些基于它的代码实现（此题不用填写内容）
+
+  
 
 - 对于如下的代码段，请说明":"后面的数字是什么含义
 ```
@@ -39,6 +69,10 @@
     unsigned gd_off_31_16 : 16;        // high bits of offset in segment
  };
 ```
+
+":"后面的数字代表每一个变量在结构体中所占的位数。即将结构体中每一个变量用bit来进行精确的定义。
+
+这个结构体是IDT中门的描述符，这个门的大小是16+16+5+7+4+16=64bit。
 
 - 对于如下的代码段，
 
@@ -63,17 +97,96 @@ SETGATE(intr, 1,2,3,0);
 ```
 请问执行上述指令后， intr的值是多少？
 
+根据实验1的代码进行填充，得到intr
+
+(gate).gd_off_15_0 =0000 0000 0000 0011
+
+(gate).gd_ss= 0000 0000 0000 0010
+
+(gate).gd_args =0000 0
+
+(gate).gd_rsv1 = 000
+
+(gate).gd_type = STS_TG32 = 1111
+
+(gate).gd_s = 0
+
+(gate).gd_dpl=00
+
+(gate).gd_p = 1
+
+(gate).gd_off_31_16=0000 0000 0000 0000
+
+所以intr=0x0001f0020003000
+
+因为intr的类型是`unsigned`，同时`unsigned`的长度是4个字节，因此intr=0x20003
+
 ### 课堂实践练习
 
 #### 练习一
 
 1. 请在ucore中找一段你认为难度适当的AT&T格式X86汇编代码，尝试解释其含义。
 
+   后期的用于切换上下文的switch.S。把当前寄存器保存在`struct context from`中，再从`struct context to`中恢复寄存器。
+
+   ```
+   struct context {
+       uint32_t eip;
+       uint32_t esp;
+       uint32_t ebx;
+       uint32_t ecx;
+       uint32_t edx;
+       uint32_t esi;
+       uint32_t edi;
+       uint32_t ebp;
+   };
+   ```
+
+   开始时，栈顶是返回地址，下面（`esp-4`）是`from`（因为参数是从右往左压栈的），再下面是`to`。系统先从栈中取出`from`，然后把该函数的返回地址弹出，保存到`from->eip`中。然后依次保存各个通用寄存器（段寄存器不需要保存，因为内核线程之间这些寄存器都一样）。因为`eax`中保存的总是返回值，所以可以不保存它，简化代码。之后就是从栈中再取出`to`，恢复通用寄存器，最后把`to->eip`入栈，保证返回之后能跳转到正确地址。
+
+   ```
+   .text
+   .globl switch_to
+   switch_to:                      # switch_to(from, to)
+   
+       # save from's registers
+       movl 4(%esp), %eax          # eax points to from
+       popl 0(%eax)                # save eip !popl
+       movl %esp, 4(%eax)
+       movl %ebx, 8(%eax)
+       movl %ecx, 12(%eax)
+       movl %edx, 16(%eax)
+       movl %esi, 20(%eax)
+       movl %edi, 24(%eax)
+       movl %ebp, 28(%eax)
+   
+       # restore to's registers
+       movl 4(%esp), %eax          # not 8(%esp): popped return address already
+                                   # eax now points to to
+       movl 28(%eax), %ebp
+       movl 24(%eax), %edi
+       movl 20(%eax), %esi
+       movl 16(%eax), %edx
+       movl 12(%eax), %ecx
+       movl 8(%eax), %ebx
+       movl 4(%eax), %esp
+   
+       pushl 0(%eax)               # push eip
+   
+       ret
+   ```
+
 2. (option)请在rcore中找一段你认为难度适当的RV汇编代码，尝试解释其含义。
+
+   
 
 #### 练习二
 
 宏定义和引用在内核代码中很常用。请枚举ucore或rcore中宏定义的用途，并举例描述其含义。
+
+- 利用宏进行复杂数据结构中的数据访问；
+- 利用宏进行数据类型转换；如 `to_struct`
+- 常用功能的代码片段优化；如 `ROUNDDOWN`, `SetPageDirty`
 
 #### reference
  - [Intel格式和AT&T格式汇编区别](http://www.cnblogs.com/hdk1993/p/4820353.html)
